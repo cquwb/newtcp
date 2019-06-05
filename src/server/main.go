@@ -15,11 +15,16 @@ import (
 
 type g_server struct {
 	s    map[uint32]*ReceiveSession
-	msgs chan []byte
+	msgs chan *ServerMsg
 }
 
 func (this *g_server) NewSession() wabin.Sessioner {
 	return &ReceiveSession{}
+}
+
+type ServerMsg struct {
+	s    *ReceiveSession
+	data []byte
 }
 
 type ReceiveSession struct {
@@ -41,7 +46,8 @@ func (this *ReceiveSession) Run() {
 	for {
 		select {
 		case msg := <-this.Conn.ReadChann:
-			server.msgs <- msg
+			smsg := &ServerMsg{this, msg}
+			server.msgs <- smsg
 		case <-this.Conn.CloseChan:
 			return
 
@@ -52,7 +58,10 @@ func (this *ReceiveSession) Run() {
 
 var server = &g_server{}
 
+var g_command = wabin.NewCommand()
+
 func main() {
+	Register()
 	var config *wabin.Config
 	var err error
 	if config, err = wabin.LoadConifg("../../config/server_config.xml"); err != nil {
@@ -63,7 +72,7 @@ func main() {
 		http.ListenAndServe("127.0.0.1:6060", nil)
 	}()
 	fmt.Printf("begin tcp server \n")
-	server.msgs = make(chan []byte, 1024)
+	server.msgs = make(chan *ServerMsg, 1024)
 	go hanlderMsg()
 	wabin.TCPServer(server, config)
 	/*
@@ -91,15 +100,18 @@ func hanlderMsg() {
 	for {
 		select {
 		case msg := <-server.msgs:
-			fmt.Printf("server msgs %v \n", msg)
-			data := &cs.C2S_Hello{}
-			ph := wabin.ByteToHead(msg[:20])
-			fmt.Printf("msg cmd is %d \n", ph.Cmd)
-			if err := proto.Unmarshal(msg[20:], data); err == nil {
-				fmt.Printf("proto msg is %d %s \n", data.GetId(), data.GetMsg())
-			} else {
-				fmt.Printf("proto msg error  %v \n", err)
-			}
+			g_command.Dispatch(msg.s, wabin.ByteToHead(msg.data[:20]), msg.data[20:])
+
+			/*
+				fmt.Printf("server msgs %v \n", msg)
+				data := &cs.C2S_Hello{}
+				ph := wabin.ByteToHead(msg[:20])
+				fmt.Printf("msg cmd is %d \n", ph.Cmd)
+				if err := proto.Unmarshal(msg[20:], data); err == nil {
+					fmt.Printf("proto msg is %d %s \n", data.GetId(), data.GetMsg())
+				} else {
+					fmt.Printf("proto msg error  %v \n", err)
+				}*/
 		}
 	}
 }
@@ -120,4 +132,28 @@ func handlerConn(rw net.Conn) {
 		fmt.Printf("hanlderConn read data %d %v \n", n, l)
 		//time.Sleep(time.Second * 1)
 	}
+}
+
+func Register() {
+	g_command.Register(uint32(cs.ID_ID_C2S_Hello), C2S_Hello)
+}
+
+func C2S_Hello(s wabin.Sessioner, ph *wabin.PackHead, data []byte) bool {
+	sess, _ := s.(*ReceiveSession)
+	receiveMsg := &cs.C2S_Hello{}
+	if err := proto.Unmarshal(data, receiveMsg); err != nil {
+		fmt.Printf("C2S_Hello proto unmarshal error %v \n", err)
+		return false
+	}
+	fmt.Printf("get msg is %d %s %v \n", receiveMsg.GetId(), receiveMsg.GetMsg(), sess)
+	msg := &cs.S2C_Hello{}
+	msg.Ret = proto.Uint32(uint32(1))
+	msg.Msg = proto.String("ok")
+	newHead := &wabin.PackHead{
+		Cmd: uint32(cs.ID_ID_S2C_Hello),
+		Uid: ph.Uid,
+		Sid: ph.Sid,
+	}
+	sess.Conn.Write(newHead, msg)
+	return true
 }
