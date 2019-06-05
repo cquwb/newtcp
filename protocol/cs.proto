@@ -1,0 +1,18 @@
+syntax="proto2";
+
+package cs;
+
+enum ID {
+	ID_C2S_Hello = 10000;
+	ID_S2C_Hello = 10001;
+}
+
+message C2S_Hello {
+	required uint32 id  = 1;
+	optional string msg = 2;
+}
+
+message S2C_Hello {
+	required uint32 ret = 1;
+	optional string msg = 2;
+}
